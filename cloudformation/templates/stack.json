@@ -35,7 +35,7 @@
         }
     },
     "Outputs": {
-        "CloudfrontUrl": {
+        "CloudFrontUrl": {
             "Value": {
                 "Fn::GetAtt": [
                     "CloudFrontDistribution",

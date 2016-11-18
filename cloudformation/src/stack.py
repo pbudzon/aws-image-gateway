@@ -1,19 +1,16 @@
 from troposphere import GetAtt, Ref, Template, Output, Parameter, Join
-from troposphere.s3 import Bucket, LifecycleConfiguration, LifecycleRule, WebsiteConfiguration
-from troposphere.iam import Role, Policy as IAMPolicy
-from troposphere.awslambda import Function, Code, Permission
-from troposphere.cloudfront import Distribution, DistributionConfig, CustomOrigin, DefaultCacheBehavior, \
-    ForwardedValues, CacheBehavior, CustomErrorResponse
-from troposphere.apigateway import RestApi, Resource, Method, Integration, IntegrationResponse, MethodResponse, \
-    Deployment, StageDescription
-from awacs.aws import Statement, Allow, Principal, Action, Policy
-from awacs.sts import AssumeRole
+from troposphere import s3
+from troposphere import iam
+from troposphere import awslambda
+from troposphere import cloudfront
+from troposphere import apigateway
+from awacs import aws, sts
 
-t = Template()
+template = Template()
 
-t.add_description("Image gateway")
+template.add_description("Image gateway")
 
-t.add_metadata({
+template.add_metadata({
     'AWS::CloudFormation::Interface': {
         'ParameterGroups': [
             {
@@ -33,81 +30,82 @@ t.add_metadata({
     }
 })
 
-param_bucket_name = t.add_parameter(Parameter(
+param_bucket_name = template.add_parameter(Parameter(
     "BucketName",
     Type="String",
     Description='Name of the STORAGE bucket to create where the images will be uploaded and renditions cached'
 ))
 
-param_lambda_source_bucket = t.add_parameter(Parameter(
+param_lambda_source_bucket = template.add_parameter(Parameter(
     "LambdaSourceBucket",
     Type="String",
     Description="Name of the bucket where lambda function sources is stored"
 ))
 
-param_lambda_file_name = t.add_parameter(Parameter(
+param_lambda_file_name = template.add_parameter(Parameter(
     "LambdaFileName",
     Type="String",
     Description="Name of the ZIP file with lambda function sources inside LambdaSourceBucket"
 ))
 
-bucket = t.add_resource(Bucket(
+bucket = template.add_resource(s3.Bucket(
     "StorageBucket",
     AccessControl='Private',
     BucketName=Ref(param_bucket_name),
-    LifecycleConfiguration=LifecycleConfiguration(
+    LifecycleConfiguration=s3.LifecycleConfiguration(
         Rules=[
-            LifecycleRule(
+            s3.LifecycleRule(
                 Prefix="images/",
                 Status="Enabled",
                 ExpirationInDays=14
             )
         ]
     ),
-    WebsiteConfiguration=WebsiteConfiguration(
+    WebsiteConfiguration=s3.WebsiteConfiguration(
         IndexDocument="index.html"
     )
 ))
 
-lambda_role = t.add_resource(Role(
+lambda_role = template.add_resource(iam.Role(
     "LambaRole",
-    AssumeRolePolicyDocument=Policy(
+    AssumeRolePolicyDocument=aws.Policy(
         Statement=[
-            Statement(
-                Effect=Allow, Action=[AssumeRole],
-                Principal=Principal(
+            aws.Statement(
+                Effect=aws.Allow,
+                Action=[sts.AssumeRole],
+                Principal=aws.Principal(
                     "Service", ["lambda.amazonaws.com"]
                 )
             )
         ]
     ),
     Policies=[
-        IAMPolicy(
+        iam.Policy(
             PolicyName="ImgGatewayLambaPolicy",
-            PolicyDocument=Policy(
+            PolicyDocument=aws.Policy(
                 Statement=[
-                    Statement(
-                        Effect=Allow,
+                    aws.Statement(
+                        Effect=aws.Allow,
                         Action=[
-                            Action("logs", "CreateLogGroup"),
-                            Action("logs", "CreateLogStream"),
-                            Action("logs", "PutLogEvents"),
+                            aws.Action("logs", "CreateLogGroup"),
+                            aws.Action("logs", "CreateLogStream"),
+                            aws.Action("logs", "PutLogEvents"),
                         ],
                         Resource=["arn:aws:logs:*:*:*"]
                     ),
-                    Statement(
-                        Effect=Allow,
+                    aws.Statement(
+                        Effect=aws.Allow,
                         Action=[
-                            Action("s3", "GetObject")
+                            aws.Action("s3", "GetObject")
                         ],
                         Resource=[
                             Join("", ["arn:aws:s3:::", Ref(bucket), "/*"])
                         ]
                     ),
-                    Statement(
-                        Effect=Allow,
+                    aws.Statement(
+                        Effect=aws.Allow,
                         Action=[
-                            Action("s3", "PutObject*")
+                            aws.Action("s3", "PutObject*")
                         ],
                         Resource=[
                             Join("", ["arn:aws:s3:::", Ref(bucket), "/images/*"])
@@ -120,9 +118,9 @@ lambda_role = t.add_resource(Role(
     ]
 ))
 
-lambda_function = t.add_resource(Function(
+lambda_function = template.add_resource(awslambda.Function(
     "Lambda",
-    Code=Code(
+    Code=awslambda.Code(
         S3Bucket=Ref(param_lambda_source_bucket),
         S3Key=Ref(param_lambda_file_name)
     ),
@@ -133,19 +131,19 @@ lambda_function = t.add_resource(Function(
     Timeout=30
 ))
 
-api = t.add_resource(RestApi(
+api = template.add_resource(apigateway.RestApi(
     "API",
     Description="Image Gateway API",
     Name="ImageGateway"
 ))
 
-cloudfront = t.add_resource(Distribution(
+cloudfront_distro = template.add_resource(cloudfront.Distribution(
     "CloudFrontDistribution",
-    DistributionConfig=DistributionConfig(
+    DistributionConfig=cloudfront.DistributionConfig(
         Comment="Image Gateway",
         Enabled=True,
-        DefaultCacheBehavior=DefaultCacheBehavior(
-            ForwardedValues=ForwardedValues(
+        DefaultCacheBehavior=cloudfront.DefaultCacheBehavior(
+            ForwardedValues=cloudfront.ForwardedValues(
                 QueryString=True,
                 Headers=["Location"]
             ),
@@ -153,11 +151,11 @@ cloudfront = t.add_resource(Distribution(
             ViewerProtocolPolicy="allow-all"
         ),
         CacheBehaviors=[
-            CacheBehavior(
+            cloudfront.CacheBehavior(
                 TargetOriginId="bucket",
                 DefaultTTL=86400,
                 PathPattern="images/*",
-                ForwardedValues=ForwardedValues(
+                ForwardedValues=cloudfront.ForwardedValues(
                     QueryString=False,
                 ),
                 ViewerProtocolPolicy="allow-all"
@@ -165,7 +163,7 @@ cloudfront = t.add_resource(Distribution(
         ],
         Origins=[
             {
-                "CustomOriginConfig": CustomOrigin(
+                "CustomOriginConfig": cloudfront.CustomOrigin(
                     OriginProtocolPolicy="https-only"
                 ),
                 "DomainName": Join("", [Ref(api), ".execute-api.", Ref("AWS::Region"), ".amazonaws.com"]),
@@ -173,7 +171,7 @@ cloudfront = t.add_resource(Distribution(
                 "Id": "lambda"
             },
             {
-                "CustomOriginConfig": CustomOrigin(
+                "CustomOriginConfig": cloudfront.CustomOrigin(
                     OriginProtocolPolicy="http-only"
                 ),
                 "DomainName": Join("", [Ref(bucket), ".s3-website-", Ref("AWS::Region"), ".amazonaws.com"]),
@@ -183,11 +181,11 @@ cloudfront = t.add_resource(Distribution(
         ],
         PriceClass='PriceClass_100',
         CustomErrorResponses=[
-            CustomErrorResponse(
+            cloudfront.CustomErrorResponse(
                 ErrorCode=403,
                 ErrorCachingMinTTL=0
             ),
-            CustomErrorResponse(
+            cloudfront.CustomErrorResponse(
                 ErrorCode=404,
                 ErrorCachingMinTTL=0
             )
@@ -195,25 +193,27 @@ cloudfront = t.add_resource(Distribution(
     )
 ))
 
-api_image_resource = t.add_resource(Resource(
+api_image_resource = template.add_resource(apigateway.Resource(
     "APIImageResource",
     ParentId=GetAtt(api, "RootResourceId"),
     PathPart="{image}",
     RestApiId=Ref(api)
 ))
 
-api_image_method = t.add_resource(Method(
+api_image_method = template.add_resource(apigateway.Method(
     "APIImageMethodGET",
     ApiKeyRequired=False,
     AuthorizationType="NONE",
     HttpMethod="GET",
     ResourceId=Ref(api_image_resource),
     RestApiId=Ref(api),
-    Integration=Integration(
+    Integration=apigateway.Integration(
         Type="AWS",
         IntegrationHttpMethod="POST",
         Uri=Join("", [
-            "arn:aws:apigateway:", Ref("AWS::Region"), ":lambda:path/2015-03-31/functions/",
+            "arn:aws:apigateway:",
+            Ref("AWS::Region"),
+            ":lambda:path/2015-03-31/functions/",
             GetAtt(lambda_function, "Arn"),
             "/invocations"
         ]),
@@ -221,11 +221,11 @@ api_image_method = t.add_resource(Method(
             "application/json": Join("", [
                 "{\"width\": \"$input.params('width')\", \"image\": \"$input.params('image')\", \"height\": \"$input.params('height')\", \"bucket\":\"",
                 Ref(param_bucket_name),
-                "\", \"cloudfront\":\"", GetAtt(cloudfront, "DomainName"), "\"}"
+                "\", \"cloudfront\":\"", GetAtt(cloudfront_distro, "DomainName"), "\"}"
             ])
         },
         IntegrationResponses=[
-            IntegrationResponse(
+            apigateway.IntegrationResponse(
                 "IntegrationResponse",
                 StatusCode="302",
                 ResponseParameters={
@@ -235,7 +235,7 @@ api_image_method = t.add_resource(Method(
                     "application/json": "$input.params('whatever')"
                 }
             ),
-            IntegrationResponse(
+            apigateway.IntegrationResponse(
                 "IntegrationResponse",
                 StatusCode="404",
                 SelectionPattern="[a-zA-Z]+.*",  # any error
@@ -251,42 +251,48 @@ api_image_method = t.add_resource(Method(
         "method.request.querystring.width": True,
     },
     MethodResponses=[
-        MethodResponse(
+        apigateway.MethodResponse(
             "APIResponse",
             StatusCode="302",
             ResponseParameters={
                 "method.response.header.Location": True
             }
         ),
-        MethodResponse(
+        apigateway.MethodResponse(
             "APIResponse",
             StatusCode="404"
         )
     ]
 ))
 
-api_lambda_permission = t.add_resource(Permission(
+api_lambda_permission = template.add_resource(awslambda.Permission(
     "APILambdaPermission",
     Action="lambda:InvokeFunction",
     FunctionName=Ref(lambda_function),
     Principal="apigateway.amazonaws.com",
     SourceArn=Join("", [
-        "arn:aws:execute-api:", Ref("AWS::Region"), ":", Ref("AWS::AccountId"), ":", Ref(api), "/*/GET/*"
+        "arn:aws:execute-api:",
+        Ref("AWS::Region"),
+        ":",
+        Ref("AWS::AccountId"),
+        ":",
+        Ref(api),
+        "/*/GET/*"
     ])
 ))
 
-api_deployment = t.add_resource(Deployment(
+api_deployment = template.add_resource(apigateway.Deployment(
     "APIDeployment",
     RestApiId=Ref(api),
     StageName="live",
-    StageDescription=StageDescription(
+    StageDescription=apigateway.StageDescription(
         CacheClusterEnabled=False,
     )
 ))
 
-t.add_output(Output(
-    "CloudfrontUrl",
-    Value=GetAtt(cloudfront, "DomainName")
+template.add_output(Output(
+    "CloudFrontUrl",
+    Value=GetAtt(cloudfront_distro, "DomainName")
 ))
 
-print t.to_json()
+print template.to_json()
